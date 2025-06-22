@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+  <title>Google Ads Export</title>
+</head>
+<body>
+  <h1>Google Ads Change History Export</h1>
+  {% if authorized %}
+    <p>✅ You’re logged in.</p>
+    <button onclick="location.href='/export-to-sheets'">
+      Export All Child Accounts to Google Sheets
+    </button>
+    <p><a href="/logout">Logout</a></p>
+  {% else %}
+    <a href="/login">Login with Google</a>
+  {% endif %}
+</body>
+</html>
