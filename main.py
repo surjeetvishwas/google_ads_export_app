@@ -182,8 +182,9 @@ def export_to_sheets():
                             cs.resource_type,
                             cs.resource_status
                         ])
-            except GoogleAdsException as e:
-                rows.append([manager_id, cid, 'ERROR', str(e.error.code()), e.error.message])
+            except Exception as e:
+                # Use str(e) to capture all error types
+                rows.append([manager_id, cid, 'ERROR', '', '', str(e)])
 
         sheets.spreadsheets().values().clear(
             spreadsheetId=sheet_id, range='Sheet1'
