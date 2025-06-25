@@ -2,6 +2,7 @@ import os
 import time
 import flask
 from flask import Flask, redirect, session, url_for, render_template
+from werkzeug.middleware.proxy_fix import ProxyFix
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -10,6 +11,8 @@ from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
 app = Flask(__name__)
+# Trust the Cloud Run proxy for host & proto
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev_secret")
 
 # Env vars
@@ -26,7 +29,6 @@ SCOPES = [
 
 @app.route("/")
 def index():
-    # Ensure 'authorized' is a proper boolean
     authorized = bool(session.get("credentials"))
     return render_template("index.html", authorized=authorized)
 
@@ -72,7 +74,7 @@ def oauth2callback():
         'client_secret': creds.client_secret,
         'scopes': creds.scopes
     }
-    session.pop('sheet_id', None)  # reset sheet on re-login
+    session.pop('sheet_id', None)
     return redirect(url_for("index"))
 
 @app.route("/export-to-sheets")
@@ -80,7 +82,7 @@ def export_to_sheets():
     if 'credentials' not in session:
         return redirect(url_for('index'))
 
-    # Rebuild credentials
+    # Rebuild creds
     info = session['credentials']
     creds = Credentials(
         token=info['token'],
@@ -92,7 +94,7 @@ def export_to_sheets():
     )
     sheets = build('sheets', 'v4', credentials=creds)
 
-    # Create or reuse a spreadsheet
+    # Create or reuse sheet
     sheet_id = session.get('sheet_id')
     if not sheet_id:
         resp = sheets.spreadsheets().create(
@@ -101,20 +103,18 @@ def export_to_sheets():
         sheet_id = resp['spreadsheetId']
         session['sheet_id'] = sheet_id
 
-    # Prepare Google Ads client
-    ads_config = {
+    # Google Ads client
+    ads_cfg = {
         'developer_token': DEVELOPER_TOKEN,
         'client_id':       GOOGLE_CLIENT_ID,
         'client_secret':   GOOGLE_CLIENT_SECRET,
         'refresh_token':   creds.refresh_token,
     }
-    client = GoogleAdsClient.load_from_dict(ads_config)
+    client = GoogleAdsClient.load_from_dict(ads_cfg)
     cust_svc = client.get_service('CustomerService')
 
-    # 1️⃣ List accessible customers
     resources = cust_svc.list_accessible_customers().resource_names
 
-    # 2️⃣ Identify manager + children
     manager_id = None
     child_ids = []
     for r in resources:
@@ -127,9 +127,9 @@ def export_to_sheets():
     if not manager_id and child_ids:
         manager_id = child_ids.pop(0)
 
-    # 3️⃣ Query change history
-    ads_config['login_customer_id'] = manager_id
-    client = GoogleAdsClient.load_from_dict(ads_config)
+    # Query each child
+    ads_cfg['login_customer_id'] = manager_id
+    client = GoogleAdsClient.load_from_dict(ads_cfg)
     ga_svc = client.get_service('GoogleAdsService')
 
     query = """
@@ -146,7 +146,6 @@ def export_to_sheets():
         'resource_name','last_change_time',
         'resource_type','resource_status'
     ]]
-
     for cid in child_ids:
         time.sleep(1)
         try:
@@ -164,7 +163,7 @@ def export_to_sheets():
         except GoogleAdsException as e:
             rows.append([manager_id, cid, 'ERROR', str(e.error.code()), e.error.message])
 
-    # 4️⃣ Write to Google Sheet
+    # Write to sheet
     sheets.spreadsheets().values().clear(
         spreadsheetId=sheet_id, range='Sheet1'
     ).execute()
