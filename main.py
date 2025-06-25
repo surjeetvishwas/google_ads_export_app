@@ -125,9 +125,19 @@ def export_to_sheets():
         child_ids = []
 
         for r in resources:
-            cust = cust_svc.get_customer(resource_name=r)
             cid = r.split('/')[-1]
-            if cust.manager:
+            # Query to check if this customer is a manager
+            query = """
+                SELECT customer.manager
+                FROM customer
+                WHERE customer.resource_name = '{}'
+            """.format(r)
+            ga_svc = client.get_service('GoogleAdsService')
+            response = ga_svc.search(customer_id=cid, query=query)
+            is_manager = False
+            for row in response:
+                is_manager = row.customer.manager
+            if is_manager:
                 manager_id = cid
             else:
                 child_ids.append(cid)
