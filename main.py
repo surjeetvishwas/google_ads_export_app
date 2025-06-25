@@ -145,7 +145,9 @@ def export_to_sheets():
             manager_id = child_ids.pop(0)
 
         ads_cfg = dict(base_ads_cfg)
-        ads_cfg["login_customer_id"] = str(manager_id)
+        # Only set login_customer_id if you are using a manager account
+        if manager_id:
+            ads_cfg["login_customer_id"] = str(manager_id)
         client = GoogleAdsClient.load_from_dict(ads_cfg)
         ga_svc = client.get_service('GoogleAdsService')
 
