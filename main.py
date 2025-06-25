@@ -22,10 +22,15 @@ DEVELOPER_TOKEN      = os.environ["DEVELOPER_TOKEN"]
 REDIRECT_URI         = os.environ["REDIRECT_URI"]
 
 SCOPES = [
-    "https://www.googleapis.com/auth/adwords",
     "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/adwords",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/photoslibrary",
+    "https://www.googleapis.com/auth/documents",
     "openid", "email", "profile"
 ]
+
 
 @app.route("/")
 def index():
