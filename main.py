@@ -54,6 +54,7 @@ def login():
 
 @app.route("/oauth2callback")
 def oauth2callback():
+    state = session.get('state')  # Don't pop, just get
     flow = Flow.from_client_config({
         "web": {
             "client_id":     GOOGLE_CLIENT_ID,
@@ -62,7 +63,7 @@ def oauth2callback():
             "token_uri":     "https://oauth2.googleapis.com/token",
             "redirect_uris":[REDIRECT_URI]
         }
-    }, scopes=SCOPES, state=session.pop('state', None), redirect_uri=REDIRECT_URI)
+    }, scopes=SCOPES, state=state, redirect_uri=REDIRECT_URI)
     flow.fetch_token(authorization_response=flask.request.url)
 
     creds = flow.credentials
