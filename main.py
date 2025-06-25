@@ -23,8 +23,12 @@ REDIRECT_URI         = os.environ["REDIRECT_URI"]
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/adwords",
-    "openid", "email", "profile"
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid"
 ]
+
+
 
 @app.route("/")
 def index():
