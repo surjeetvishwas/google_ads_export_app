@@ -11,26 +11,20 @@ from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
 app = Flask(__name__)
-# Trust the Cloud Run proxy for host & proto
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev_secret")
 
-# Env vars
 GOOGLE_CLIENT_ID     = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 DEVELOPER_TOKEN      = os.environ["DEVELOPER_TOKEN"]
 REDIRECT_URI         = os.environ["REDIRECT_URI"]
 
+# Keep only required scopes
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/adwords",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/photoslibrary",
-    "https://www.googleapis.com/auth/documents",
     "openid", "email", "profile"
 ]
-
 
 @app.route("/")
 def index():
@@ -39,56 +33,61 @@ def index():
 
 @app.route("/login")
 def login():
+    session.clear()  # Clear previous sessions
     flow = Flow.from_client_config({
         "web": {
-            "client_id":     GOOGLE_CLIENT_ID,
+            "client_id": GOOGLE_CLIENT_ID,
             "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris":[REDIRECT_URI]
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [REDIRECT_URI]
         }
     }, scopes=SCOPES, redirect_uri=REDIRECT_URI)
 
     auth_url, state = flow.authorization_url(
         prompt="consent",
         access_type="offline",
-        include_granted_scopes="true"
+        include_granted_scopes=False
     )
     session['state'] = state
     return redirect(auth_url)
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    state = session.get('state')  # Don't pop, just get
-    flow = Flow.from_client_config({
-        "web": {
-            "client_id":     GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris":[REDIRECT_URI]
-        }
-    }, scopes=SCOPES, state=state, redirect_uri=REDIRECT_URI)
-    flow.fetch_token(authorization_response=flask.request.url)
+    try:
+        state = session.get('state')
+        flow = Flow.from_client_config({
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [REDIRECT_URI]
+            }
+        }, scopes=SCOPES, state=state, redirect_uri=REDIRECT_URI)
 
-    creds = flow.credentials
-    session['credentials'] = {
-        'token': creds.token,
-        'refresh_token': creds.refresh_token,
-        'token_uri': creds.token_uri,
-        'client_id': creds.client_id,
-        'client_secret': creds.client_secret,
-        'scopes': creds.scopes
-    }
-    session.pop('sheet_id', None)
-    return redirect(url_for("index"))
+        flow.fetch_token(authorization_response=flask.request.url)
+
+        creds = flow.credentials
+        session['credentials'] = {
+            'token': creds.token,
+            'refresh_token': creds.refresh_token,
+            'token_uri': creds.token_uri,
+            'client_id': creds.client_id,
+            'client_secret': creds.client_secret,
+            'scopes': creds.scopes
+        }
+        session.pop('sheet_id', None)
+        return redirect(url_for("index"))
+
+    except Exception as e:
+        return f"<h3>❌ OAuth error: {str(e)}</h3><p>Try <a href='/login'>logging in again</a>.</p>", 500
 
 @app.route("/export-to-sheets")
 def export_to_sheets():
     if 'credentials' not in session:
         return redirect(url_for('index'))
 
-    # Rebuild creds
     info = session['credentials']
     creds = Credentials(
         token=info['token'],
@@ -98,9 +97,9 @@ def export_to_sheets():
         client_secret=info['client_secret'],
         scopes=info['scopes']
     )
+
     sheets = build('sheets', 'v4', credentials=creds)
 
-    # Create or reuse sheet
     sheet_id = session.get('sheet_id')
     if not sheet_id:
         resp = sheets.spreadsheets().create(
@@ -109,20 +108,19 @@ def export_to_sheets():
         sheet_id = resp['spreadsheetId']
         session['sheet_id'] = sheet_id
 
-    # Google Ads client
     ads_cfg = {
         'developer_token': DEVELOPER_TOKEN,
-        'client_id':       GOOGLE_CLIENT_ID,
-        'client_secret':   GOOGLE_CLIENT_SECRET,
-        'refresh_token':   creds.refresh_token,
+        'client_id': GOOGLE_CLIENT_ID,
+        'client_secret': GOOGLE_CLIENT_SECRET,
+        'refresh_token': creds.refresh_token,
     }
     client = GoogleAdsClient.load_from_dict(ads_cfg)
     cust_svc = client.get_service('CustomerService')
 
     resources = cust_svc.list_accessible_customers().resource_names
-
     manager_id = None
     child_ids = []
+
     for r in resources:
         cust = cust_svc.get_customer(resource_name=r)
         cid = r.split('/')[-1]
@@ -133,7 +131,6 @@ def export_to_sheets():
     if not manager_id and child_ids:
         manager_id = child_ids.pop(0)
 
-    # Query each child
     ads_cfg['login_customer_id'] = manager_id
     client = GoogleAdsClient.load_from_dict(ads_cfg)
     ga_svc = client.get_service('GoogleAdsService')
@@ -169,7 +166,6 @@ def export_to_sheets():
         except GoogleAdsException as e:
             rows.append([manager_id, cid, 'ERROR', str(e.error.code()), e.error.message])
 
-    # Write to sheet
     sheets.spreadsheets().values().clear(
         spreadsheetId=sheet_id, range='Sheet1'
     ).execute()
