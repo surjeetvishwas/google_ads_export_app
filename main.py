@@ -126,21 +126,24 @@ def export_to_sheets():
 
         for r in resources:
             cid = r.split('/')[-1]
-            # Query to check if this customer is a manager
             query = """
                 SELECT customer.manager
                 FROM customer
                 WHERE customer.resource_name = '{}'
             """.format(r)
             ga_svc = client.get_service('GoogleAdsService')
-            response = ga_svc.search(customer_id=cid, query=query)
-            is_manager = False
-            for row in response:
-                is_manager = row.customer.manager
-            if is_manager:
-                manager_id = cid
-            else:
-                child_ids.append(cid)
+            try:
+                response = ga_svc.search(customer_id=cid, query=query)
+                is_manager = False
+                for row in response:
+                    is_manager = row.customer.manager
+                if is_manager:
+                    manager_id = cid
+                else:
+                    child_ids.append(cid)
+            except GoogleAdsException as e:
+                # Skip accounts that are not enabled or have permission errors
+                continue
         if not manager_id and child_ids:
             manager_id = child_ids.pop(0)
 
