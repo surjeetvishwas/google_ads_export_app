@@ -6,7 +6,6 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
@@ -19,7 +18,6 @@ GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 DEVELOPER_TOKEN      = os.environ["DEVELOPER_TOKEN"]
 REDIRECT_URI         = os.environ["REDIRECT_URI"]
 
-# Keep only required scopes
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/adwords",
@@ -28,8 +26,6 @@ SCOPES = [
     "openid"
 ]
 
-
-
 @app.route("/")
 def index():
     authorized = bool(session.get("credentials"))
@@ -37,7 +33,7 @@ def index():
 
 @app.route("/login")
 def login():
-    session.clear()  # Clear previous sessions
+    session.clear()
     flow = Flow.from_client_config({
         "web": {
             "client_id": GOOGLE_CLIENT_ID,
@@ -112,76 +108,83 @@ def export_to_sheets():
         sheet_id = resp['spreadsheetId']
         session['sheet_id'] = sheet_id
 
-    ads_cfg = {
+    base_ads_cfg = {
         'developer_token': DEVELOPER_TOKEN,
         'client_id': GOOGLE_CLIENT_ID,
         'client_secret': GOOGLE_CLIENT_SECRET,
         'refresh_token': creds.refresh_token,
+        'use_proto_plus': True
     }
-    client = GoogleAdsClient.load_from_dict(ads_cfg)
-    cust_svc = client.get_service('CustomerService')
 
-    resources = cust_svc.list_accessible_customers().resource_names
-    manager_id = None
-    child_ids = []
+    try:
+        client = GoogleAdsClient.load_from_dict(base_ads_cfg)
+        cust_svc = client.get_service('CustomerService')
 
-    for r in resources:
-        cust = cust_svc.get_customer(resource_name=r)
-        cid = r.split('/')[-1]
-        if cust.manager:
-            manager_id = cid
-        else:
-            child_ids.append(cid)
-    if not manager_id and child_ids:
-        manager_id = child_ids.pop(0)
+        resources = cust_svc.list_accessible_customers().resource_names
+        manager_id = None
+        child_ids = []
 
-    ads_cfg['login_customer_id'] = manager_id
-    client = GoogleAdsClient.load_from_dict(ads_cfg)
-    ga_svc = client.get_service('GoogleAdsService')
+        for r in resources:
+            cust = cust_svc.get_customer(resource_name=r)
+            cid = r.split('/')[-1]
+            if cust.manager:
+                manager_id = cid
+            else:
+                child_ids.append(cid)
+        if not manager_id and child_ids:
+            manager_id = child_ids.pop(0)
 
-    query = """
-      SELECT change_status.resource_name,
-             change_status.last_change_date_time,
-             change_status.resource_type,
-             change_status.resource_status
-      FROM change_status
-      WHERE change_status.last_change_date_time DURING LAST_30_DAYS
-    """
+        ads_cfg = dict(base_ads_cfg)
+        ads_cfg["login_customer_id"] = str(manager_id)
+        client = GoogleAdsClient.load_from_dict(ads_cfg)
+        ga_svc = client.get_service('GoogleAdsService')
 
-    rows = [[
-        'manager_customer','child_customer',
-        'resource_name','last_change_time',
-        'resource_type','resource_status'
-    ]]
-    for cid in child_ids:
-        time.sleep(1)
-        try:
-            stream = ga_svc.search_stream(customer_id=cid, query=query)
-            for batch in stream:
-                for row in batch.results:
-                    cs = row.change_status
-                    rows.append([
-                        manager_id, cid,
-                        cs.resource_name,
-                        cs.last_change_date_time,
-                        cs.resource_type,
-                        cs.resource_status
-                    ])
-        except GoogleAdsException as e:
-            rows.append([manager_id, cid, 'ERROR', str(e.error.code()), e.error.message])
+        query = """
+          SELECT change_status.resource_name,
+                 change_status.last_change_date_time,
+                 change_status.resource_type,
+                 change_status.resource_status
+          FROM change_status
+          WHERE change_status.last_change_date_time DURING LAST_30_DAYS
+        """
 
-    sheets.spreadsheets().values().clear(
-        spreadsheetId=sheet_id, range='Sheet1'
-    ).execute()
-    sheets.spreadsheets().values().update(
-        spreadsheetId=sheet_id,
-        range='Sheet1!A1',
-        valueInputOption='RAW',
-        body={'values': rows}
-    ).execute()
+        rows = [[
+            'manager_customer', 'child_customer',
+            'resource_name', 'last_change_time',
+            'resource_type', 'resource_status'
+        ]]
+        for cid in child_ids:
+            time.sleep(1)
+            try:
+                stream = ga_svc.search_stream(customer_id=cid, query=query)
+                for batch in stream:
+                    for row in batch.results:
+                        cs = row.change_status
+                        rows.append([
+                            manager_id, cid,
+                            cs.resource_name,
+                            cs.last_change_date_time,
+                            cs.resource_type,
+                            cs.resource_status
+                        ])
+            except GoogleAdsException as e:
+                rows.append([manager_id, cid, 'ERROR', str(e.error.code()), e.error.message])
 
-    link = f"https://docs.google.com/spreadsheets/d/{sheet_id}"
-    return f'<h2>✅ Export complete! View your data <a href="{link}" target="_blank">here</a>.</h2>'
+        sheets.spreadsheets().values().clear(
+            spreadsheetId=sheet_id, range='Sheet1'
+        ).execute()
+        sheets.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range='Sheet1!A1',
+            valueInputOption='RAW',
+            body={'values': rows}
+        ).execute()
+
+        link = f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+        return f'<h2>✅ Export complete! View your data <a href="{link}" target="_blank">here</a>.</h2>'
+
+    except Exception as e:
+        return f"<h3>❌ Export failed: {str(e)}</h3><p>Check logs for details.</p>", 500
 
 @app.route("/logout")
 def logout():
